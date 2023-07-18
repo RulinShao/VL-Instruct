@@ -13,8 +13,9 @@ class BLIP2_VQA(Blip2Base):
     def __init__(self,                 
                     ckpt_path=None,
                     evaluate=False,
-                    model_type="blip2_t5",
+                    model_type="blip2_vicuna",
                     train_llm=False,
+                    train_qformer=True,
                  ):
         """
         Args:
@@ -41,6 +42,9 @@ class BLIP2_VQA(Blip2Base):
         elif train_llm and model_type == "blip2_t5":
             for name, param in self.model.t5_model.named_parameters():
                 param.requires_grad = True
+        if not train_qformer:
+            for name, param in self.model.Qformer.named_parameters():
+                param.requires_grad = False
 
     
     def forward(self, image, question, answer=None, n=None, weights=None, train=True, inference='rank', k_test=128):
