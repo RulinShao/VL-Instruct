@@ -65,7 +65,11 @@ class BLIP2_VQA(Blip2Base):
             return self.model.generate(samples)
 
 def blip2_vqa(args):
-    model = BLIP2_VQA(ckpt_path=args.pretrained, evaluate=args.evaluate)
-    # if pretrained:
-    #     model,msg = load_checkpoint(model,pretrained)
+    model = BLIP2_VQA(
+        ckpt_path=args.pretrained, 
+        evaluate=args.evaluate,
+        model_type=args.model_type,
+        train_llm=args.train_llm,
+        train_qformer=args.train_qformer,
+    )
     return model  
