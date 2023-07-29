@@ -1,5 +1,9 @@
 # VL-Instruct
 
+Reference codes:
+1. https://github.com/salesforce/BLIP
+2. https://github.com/salesforce/LAVIS
+
 ### Setup
 Hard-coded the vicuna7b checkpoint in the LAVIS pkg. Install from the local source
 ```
