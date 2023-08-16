@@ -15,6 +15,10 @@ SUPPORT_TASK_LIST = ['open-domain_VQA', 'text_legibility', 'image_quality', 'if_
 NOT_SUPPORT_TASK_LIST = ['region_object_selection', 'select_overlaped_region', 'descriptive_object_region_select', 'missing_object_selection']
 SUPPORT_TASK_LIST = [x for x in SUPPORT_TASK_LIST if not x in NOT_SUPPORT_TASK_LIST]
 
+# Define domain id mapping for doremi
+VL_DOMAINS = ['llava', 'mini-gpt4', 'macaw', 'lamm', ]
+DOMAIN_TO_IDX = {
+    name: idx for idx, name in enumerate(VL_DOMAINS)}
 
 class vqa_dataset(Dataset):
     def __init__(self, transform, ann_root, vqa_root, vg_root, train_files=[], split="train"):
@@ -168,19 +172,21 @@ class vqa_dataset(Dataset):
             question = instruction
             answers = [target]
             weights = [0.2]
+            domain_id = DOMAIN_TO_IDX[data_type]
 
-            return image, question, answers, weights
+            return image, question, answers, weights, domain_id
         
         
 def vqa_collate_fn(batch):
-    image_list, question_list, answer_list, weight_list, n = [], [], [], [], []
-    for image, question, answer, weights in batch:
+    image_list, question_list, answer_list, weight_list, n, domain_ids = [], [], [], [], [], []
+    for image, question, answer, weights, domain_id in batch:
         image_list.append(image)
         question_list.append(question)
         weight_list += weights       
         answer_list += answer
         n.append(len(answer))
-    return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(weight_list), n        
+        domain_ids.append(domain_id)
+    return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(weight_list), n, domian_ids        
 
 def check_lamm_image():
     bad_images = ['bamboo_images/2880700382_2c2817c6c5_c.jpg']

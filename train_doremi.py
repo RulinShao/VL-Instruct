@@ -30,6 +30,62 @@ from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
 
 
+class Doremi():
+    def __init__(self, args):
+        self.args = args
+        with open(self.args.domain_config_path, 'r') as f:
+            self.domain_config = json.load(f)
+
+        self.train_domain_weights_dict = self.domain_config['train_domain_weights']
+        self.eval_domain_weights_dict = self.domain_config['eval_domain_weights']
+
+        self.domain_list = list(sorted(self.train_domain_weights_dict.keys()))
+        self.sampling_weights = torch.tensor([self.train_domain_weights_dict[domain] for domain in self.domain_list])
+
+        self.pertoken_scores = []
+        self.token_masks = []
+        self.domain_ids = []
+
+        # we will take care of skipping in dataloader
+        self.args.ignore_data_skip = True
+
+    def write_weights(self, weights):
+        self.model.update_counter += 1
+        self.model.train_domain_weights[:] = weights
+        self.model.avg_domain_weights[:] = (self.model.avg_domain_weights * (self.model.update_counter  - 1) + weights) / self.model.update_counter
+
+    def read_weights(self):
+        return self.model.train_domain_weights.clone()
+
+    def set_attributes(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def update_domain_weights(self, scores, scores_mask, domain_ids):
+        train_domain_weights = self.read_weights()
+
+        scores = scores.detach()
+        domain_ids = domain_ids.detach()
+
+	if self.args.doremi_optimizer == 'doremiv1':
+	    perdomain_scores = []
+	    for domain_id in range(len(train_domain_weights)):
+		domain_mask = (domain_ids == domain_id)
+		perdomain_scores_mask = scores_mask[domain_mask]
+		if domain_mask.sum() > 0:
+		    curr_domain_scores = torch.clip(scores[domain_mask][perdomain_scores_mask], min=0).mean()
+		else:
+		    curr_domain_scores = self.model.perdomain_scores[domain_id]
+		perdomain_scores.append(curr_domain_scores)
+	    self.model.perdomain_scores[:] = torch.tensor(perdomain_scores)
+	    log_new_train_domain_weights = torch.log(train_domain_weights) + self.args.reweight_eta * self.model.perdomain_scores
+	    new_train_domain_weights = nn.functional.softmax(log_new_train_domain_weights, dim=0)
+	    train_domain_weights = (1-self.args.reweight_eps) * new_train_domain_weights + self.args.reweight_eps / len(new_train_domain_weights)
+	    self.write_weights(train_domain_weights)
+	else:
+            raise ValueError(f"DoReMi optimizer {self.args.doremi_optimizer} not supported")
+
+
 def train(model, data_loader, optimizer, epoch, device):
     # train
     model.train()  
@@ -41,10 +97,41 @@ def train(model, data_loader, optimizer, epoch, device):
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50    
     
-    for i,(image, question, answer, weights, n) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for i,(image, question, answer, weights, n, domain_ids) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         image, weights = image.to(device,non_blocking=True), weights.to(device,non_blocking=True)      
 
-        loss = model(image, question, answer, train=True, n=n, weights=weights)        
+        # doremi requires pertoken loss
+        loss, pertoken_loss, reference_pertoken_loss, token_mask = model(image, question, answer, train=True, n=n, weights=weights, domain_ids=domain_ids, return_pertoken_losses=True)        
+        excess_loss = pertoken_loss - reference_pertoken_loss
+
+        doremi.pertoken_scores.append(excess_loss.detach())
+        doremi.token_masks.append(token_mask.detach())
+        doremi.domain_ids.append(domain_id.detach())
+
+        if len(self.pertoken_scores) == args.gradient_accumulation_steps:
+            pertoken_scores = torch.cat(doremi.pertoken_scores, dim=0)
+            token_masks = torch.cat(doremi.token_masks, dim=0).bool()
+            domain_ids = torch.cat(doremi.domain_ids, dim=0)
+
+            # update domain weights
+            doremi.update_domain_weights(pertoken_scores, token_masks, domain_ids)
+            
+            doremi.pertoken_scores = []
+            doremi.token_masks = []
+            doremi.domain_ids = []
+	
+        # compute the rescaled loss, divide by domain weights
+	train_domain_weights = model.train_domain_weights().clone().to(pertoken_loss.device)
+	# if doing non-uniform sampling, normalize by inverse sampling weight
+	train_domain_weights = train_domain_weights / doremi.sampling_weights.to(train_domain_weights.device)
+	train_domain_weights = train_domain_weights / train_domain_weights.sum()
+	curr_domain_weights = train_domain_weights[inputs['domain_ids']].unsqueeze(-1).expand_as(pertoken_loss).detach()
+	curr_domain_weights = curr_domain_weights * token_mask
+	normalizer = curr_domain_weights.sum()
+
+	token_mask = token_mask.detach().type(pertoken_loss.dtype)
+	curr_domain_weights = curr_domain_weights / normalizer
+	loss = (pertoken_loss * curr_domain_weights.detach()).sum()
         
         optimizer.zero_grad()
         loss.backward()
@@ -127,12 +214,17 @@ def main(args, config):
     #### Model #### 
     print("Creating model")
     model = blip_vqa(args) 
-    model = model.to(device)   
+    model = model.to(device)       
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module    
     
+    # define your reference model here
+    if args.doremi_train:
+        reference_model = blip_vqa(args)
+        model.reference_model = reference_model
+
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
 
     best = 0
