@@ -42,6 +42,7 @@ class Doremi():
         self.domain_list = domains.keys()
         self.num_domains = len(self.domain_list)
         self.train_domain_weights = torch.ones(self.num_domains) / self.num_domains
+        self.avg_train_domain_weights = torch.zeros_like(self.train_domain_weights)
         
         self.update_counter = 0
         self.perdomain_scores = []
@@ -50,6 +51,10 @@ class Doremi():
     def write_weights(self, weights):
         self.update_counter += 1
         self.train_domain_weights[:] = weights
+        self.avg_train_domain_weights += weights
+    
+    def get_avg_weights(self,):
+        return self.avg_train_domain_weights / self.update_counter
     
     def read_weights(self):
         return self.train_domain_weights.clone()
