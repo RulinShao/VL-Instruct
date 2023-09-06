@@ -5,8 +5,6 @@ import requests
 import torch
 from torch.nn import CrossEntropyLoss
 
-from transformers import CausalLMOutputWithCrossAttentions
-
 from lavis.models import load_model_and_preprocess
 from lavis.models.blip2_models.blip2 import Blip2Base, disabled_train
 
