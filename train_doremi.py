@@ -108,7 +108,7 @@ def test_dummy_inputs():
     domain_ids = [0, 1, 2, 3]
     reference_loss = torch.tensor([0.123, 1.23, 0.98, 3.33])
 
-    image, weights, reference_loss = image.to(device,non_blocking=True), weights.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
+    image, reference_loss = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
 
     # doremi requires pertoken loss
     #loss = model(image, question, answer, train=True)        
