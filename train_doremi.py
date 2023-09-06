@@ -111,8 +111,9 @@ def test_dummy_inputs():
     image, reference_loss = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
 
     # doremi requires pertoken loss
-    #loss = model(image, question, answer, train=True)        
-    loss = torch.randn(4).to(device)
+    #loss = model(image, question, answer, train=True)
+    a = torch.ones(4, requires_grad=True).to(device)
+    loss = torch.mean((a - 1) ** 2)
     excess_loss = torch.maximum(loss - reference_loss, torch.tensor(0))
 
     doremi.perdomain_scores.append(torch.flatten(excess_loss.detach()))
