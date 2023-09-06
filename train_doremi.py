@@ -333,4 +333,4 @@ if __name__ == '__main__':
     yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))    
     
     # main(args, config)
-    test_dummy_inputs
+    test_dummy_inputs()
