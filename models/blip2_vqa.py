@@ -37,7 +37,7 @@ class BLIP2_VQA(Blip2Base):
             self.model = self.model.to(device)
         else:
             if model_type == "blip2_t5":
-                self.model, self.vis_processors, _ = load_model_and_preprocess(name="blip2_t5", model_type="pretrain_flant5xxl", is_eval=evaluate, device=device)
+                self.model, self.vis_processors, _ = load_model_and_preprocess(name="blip2_t5", model_type="pretrain_flant5xl", is_eval=evaluate, device=device)
             elif model_type == "blip2_vicuna":
                 self.model, self.vis_processors, _ = load_model_and_preprocess(name="blip2_vicuna_instruct", model_type="vicuna7b", is_eval=evaluate, device=device)  # hard-coded in lavis to use pretrain ckpt
 

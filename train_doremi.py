@@ -316,7 +316,7 @@ if __name__ == '__main__':
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--pretrained', default=None, type=str, help='path to the saved ckpt')
-    parser.add_argument('--model_type', default="blip2_vicuna", type=str, choices=["blip2_vicuna", "blip2_t5"])
+    parser.add_argument('--model_type', default="blip2_t5", type=str, choices=["blip2_vicuna", "blip2_t5"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
     parser.add_argument('--gradient_accumulation_steps', default=100, help="accumulation steps for updating doremi domain weights")
