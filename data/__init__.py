@@ -9,7 +9,7 @@ from data.flickr30k_dataset import flickr30k_train, flickr30k_retrieval_eval
 from data.vqa_dataset import vqa_dataset
 from data.nlvr_dataset import nlvr_dataset
 from data.pretrain_dataset import pretrain_dataset
-from transform.randaugment import RandomAugment
+# from transform.randaugment import RandomAugment
 
 def create_dataset(dataset, config, min_scale=0.5):
     
@@ -18,8 +18,8 @@ def create_dataset(dataset, config, min_scale=0.5):
     transform_train = transforms.Compose([                        
             transforms.RandomResizedCrop(config['image_size'],scale=(min_scale, 1.0),interpolation=InterpolationMode.BICUBIC),
             transforms.RandomHorizontalFlip(),
-            RandomAugment(2,5,isPIL=True,augs=['Identity','AutoContrast','Brightness','Sharpness','Equalize',
-                                              'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
+            # RandomAugment(2,5,isPIL=True,augs=['Identity','AutoContrast','Brightness','Sharpness','Equalize',
+                                            #   'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
             transforms.ToTensor(),
             normalize,
         ])        
