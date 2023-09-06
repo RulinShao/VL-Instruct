@@ -105,7 +105,7 @@ def test_dummy_inputs():
     image = torch.randn((4, 3, 224, 224)).cuda()
     question = ['What is in the image?'] * 4
     answer = ['Random Pxiels'] * 4
-    domain_ids = [0, 1, 2, 3]
+    domain_ids = torch.tensor([0, 1, 2, 3])
     reference_loss = torch.tensor([0.123, 1.23, 0.98, 3.33])
 
     image, reference_loss = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
