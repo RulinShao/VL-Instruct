@@ -128,7 +128,7 @@ def test_dummy_inputs():
     # assume doing uniform sampling
     curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
 
-    loss = (loss * curr_domain_weights.detach()).sum()
+    loss = (loss * curr_domain_weights.to(device)).sum()
     loss.backward()
     print("Passed dummpy input test!")
     
