@@ -60,6 +60,9 @@ class BLIP2_VQA(Blip2Base):
                 param.requires_grad = False
 
         self.doremi = doremi_train
+        
+        # we don't need it as we assume the reference loss have been computed offline
+        self.doremi = False
         if self.doremi:
             # update the reference model outside, not here
             self.reference_model = None
@@ -112,8 +115,6 @@ class BLIP2_VQA(Blip2Base):
                         k_test=k_test,
                         domain_ids=domain_ids,
                         return_pertoken_losses=True,
-                        inference_params=inference_params,
-                        last_token_only=last_token_only,
                     )
                     reference_pertoken_loss = reference_outputs['pertoken_loss']
 

@@ -29,64 +29,106 @@ from data import create_dataset, create_sampler, create_loader
 from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
 
+domains = {
+    'ok_vqa': 9009, 'image_quality': 10000, 'VQA_attribute': 10000, 'image_text_selection': 10000, 'VQA_counting': 10000, 'wikihow_immediate_next_step_selection': 10000, 'VQA_scene_recognition': 10000, 'VQA_object_presence': 10000, 'wikihow_next_step': 10000, 'VQA_positional_reasoning': 10000, 'wikihow_text_image_step_order': 10000, 'question_image_match': 10000, 'visualgenome_vqa': 10000, 'ITM': 10000, 'VQA': 10000, 'VQA_object_recognition': 10000, 'wikihow_image_text_step_order': 10000, 'VQA_color': 10000, 'open-domain_VQA': 10000, 'VQAv2': 10000, 'VQA_sport_recognition': 10000, 'multimodal_factual_checking': 5477, 'VQA_activity_recognition': 3191, 'image_caption': 10000, 'VQA_sentiment_understanding': 1242, 'VQA_utility_affordance': 291
+}
 
 class Doremi():
     def __init__(self, args):
         self.args = args
-        with open(self.args.domain_config_path, 'r') as f:
-            self.domain_config = json.load(f)
+        self.reweight_eta = 1.0  # step size
+        self.reweight_eps = 1e-4  # smaoothing parameter
 
-        self.train_domain_weights_dict = self.domain_config['train_domain_weights']
-        self.eval_domain_weights_dict = self.domain_config['eval_domain_weights']
-
-        self.domain_list = list(sorted(self.train_domain_weights_dict.keys()))
-        self.sampling_weights = torch.tensor([self.train_domain_weights_dict[domain] for domain in self.domain_list])
-
-        self.pertoken_scores = []
-        self.token_masks = []
+        self.domain_list = domains.keys()
+        self.num_domains = len(self.domain_list)
+        self.train_domain_weights = torch.ones(self.num_domains) / self.num_domains
+        
+        self.update_counter = 0
+        self.perdomain_scores = []
         self.domain_ids = []
 
-        # we will take care of skipping in dataloader
-        self.args.ignore_data_skip = True
-
     def write_weights(self, weights):
-        self.model.update_counter += 1
-        self.model.train_domain_weights[:] = weights
-        self.model.avg_domain_weights[:] = (self.model.avg_domain_weights * (self.model.update_counter  - 1) + weights) / self.model.update_counter
-
+        self.update_counter += 1
+        self.train_domain_weights[:] = weights
+    
     def read_weights(self):
-        return self.model.train_domain_weights.clone()
+        return self.train_domain_weights.clone()
 
     def set_attributes(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-    def update_domain_weights(self, scores, scores_mask, domain_ids):
+    def update_domain_weights(self,):
         train_domain_weights = self.read_weights()
 
-        scores = scores.detach()
-        domain_ids = domain_ids.detach()
+        perdomain_scores = torch.zeros_like(self.train_domain_weights)
 
-	if self.args.doremi_optimizer == 'doremiv1':
-	    perdomain_scores = []
-	    for domain_id in range(len(train_domain_weights)):
-		domain_mask = (domain_ids == domain_id)
-		perdomain_scores_mask = scores_mask[domain_mask]
-		if domain_mask.sum() > 0:
-		    curr_domain_scores = torch.clip(scores[domain_mask][perdomain_scores_mask], min=0).mean()
-		else:
-		    curr_domain_scores = self.model.perdomain_scores[domain_id]
-		perdomain_scores.append(curr_domain_scores)
-	    self.model.perdomain_scores[:] = torch.tensor(perdomain_scores)
-	    log_new_train_domain_weights = torch.log(train_domain_weights) + self.args.reweight_eta * self.model.perdomain_scores
-	    new_train_domain_weights = nn.functional.softmax(log_new_train_domain_weights, dim=0)
-	    train_domain_weights = (1-self.args.reweight_eps) * new_train_domain_weights + self.args.reweight_eps / len(new_train_domain_weights)
-	    self.write_weights(train_domain_weights)
-	else:
-            raise ValueError(f"DoReMi optimizer {self.args.doremi_optimizer} not supported")
+        _perdomain_scores = torch.flatten(torch.cat(self.perdomain_scores, dim=0))
+        _domain_ids = torch.flatten(torch.cat(self.domain_ids, dim=0))
+
+        for domain_id in range(self.num_domains):
+            indices = torch.where(_domain_ids == domain_id)
+            perdomain_scores[domain_id] = torch.mean(_perdomain_scores[indices])
 
 
-def train(model, data_loader, optimizer, epoch, device):
+        # update domain weights
+        log_new_train_domain_weights = torch.log(train_domain_weights) + self.reweight_eta * perdomain_scores
+        
+        # renormalize and smooth domain weights
+        new_train_domain_weights = nn.functional.softmax(log_new_train_domain_weights, dim=0)
+        train_domain_weights = (1-self.reweight_eps) * new_train_domain_weights + self.reweight_eps / len(new_train_domain_weights)
+        
+        self.write_weights(train_domain_weights)
+    
+    def get_train_domain_weights(self, domain_ids):
+        train_domain_weights = self.train_domain_weights.to(domain_ids.device)
+        train_domain_weights = train_domain_weights / train_domain_weights.sum()
+        curr_domain_weights = train_domain_weights[domain_ids]
+        return curr_domain_weights / sum(curr_domain_weights)
+
+
+def test_dummy_inputs():
+    device = torch.device(args.device)
+
+    model = blip_vqa(args) 
+    model = model.to(device)   
+    model.train()
+
+    doremi = Doremi(args)
+    
+    # testing dummy inputs
+    image = torch.randn((4, 3, 224, 224)).cuda()
+    question = ['What is in the image?'] * 4
+    answer = ['Random Pxiels'] * 4
+    domain_ids = [0, 1, 2, 3]
+    reference_loss = torch.tensor([0.123, 1.23, 0.98, 3.33])
+
+    image, weights, reference_loss = image.to(device,non_blocking=True), weights.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
+
+    # doremi requires pertoken loss
+    loss = model(image, question, answer, train=True)        
+    excess_loss = torch.maximum(loss - reference_loss, torch.tensor(0))
+
+    doremi.perdomain_scores.append(torch.flatten(excess_loss.detach()))
+    doremi.domain_ids.append(torch.flatten(domain_ids.detach()))
+
+    if len(doremi.perdomain_scores) > 0:
+        # update domain weights
+        doremi.update_domain_weights()
+        doremi.perdomain_scores = []
+        doremi.domain_ids = []
+    
+    # compute the rescaled loss, divide by domain weights
+    # assume doing uniform sampling
+    curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
+
+    loss = (loss * curr_domain_weights.detach()).sum()
+    loss.backward()
+    print("Passed dummpy input test!")
+    
+
+
+def train(model, data_loader, optimizer, doremi, epoch, device):
     # train
     model.train()  
     
@@ -97,48 +139,41 @@ def train(model, data_loader, optimizer, epoch, device):
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50    
     
-    for i,(image, question, answer, weights, n, domain_ids) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        image, weights = image.to(device,non_blocking=True), weights.to(device,non_blocking=True)      
+    for i,(image, question, answer, reference_loss, domain_ids, weights, n) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        image, weights, reference_loss = image.to(device,non_blocking=True), weights.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
+        
+        # testing dummy inputs
+        image = torch.randn((4, 3, 224, 224)).cuda()
+        question = ['What is in the image?'] * 4
+        answer = ['Random Pxiels'] * 4
+        domain_ids = [0, 1, 2, 3]
+        reference_loss = torch.tensor([0.123, 1.23, 0.98, 3.33])
 
         # doremi requires pertoken loss
-        loss, pertoken_loss, reference_pertoken_loss, token_mask = model(image, question, answer, train=True, n=n, weights=weights, domain_ids=domain_ids, return_pertoken_losses=True)        
-        excess_loss = pertoken_loss - reference_pertoken_loss
+        loss = model(image, question, answer, train=True, n=n, weights=weights)        
+        excess_loss = torch.maximum(loss - reference_loss, torch.tensor(0))
 
-        doremi.pertoken_scores.append(excess_loss.detach())
-        doremi.token_masks.append(token_mask.detach())
-        doremi.domain_ids.append(domain_id.detach())
+        doremi.perdomain_scores.append(torch.flatten(excess_loss.detach()))
+        doremi.domain_ids.append(torch.flatten(domain_ids.detach()))
 
-        if len(self.pertoken_scores) == args.gradient_accumulation_steps:
-            pertoken_scores = torch.cat(doremi.pertoken_scores, dim=0)
-            token_masks = torch.cat(doremi.token_masks, dim=0).bool()
-            domain_ids = torch.cat(doremi.domain_ids, dim=0)
-
+        if len(doremi.perdomain_scores) == args.gradient_accumulation_steps:
             # update domain weights
-            doremi.update_domain_weights(pertoken_scores, token_masks, domain_ids)
-            
-            doremi.pertoken_scores = []
-            doremi.token_masks = []
+            doremi.update_domain_weights()
+            doremi.perdomain_scores = []
             doremi.domain_ids = []
 	
-        # compute the rescaled loss, divide by domain weights
-	train_domain_weights = model.train_domain_weights().clone().to(pertoken_loss.device)
-	# if doing non-uniform sampling, normalize by inverse sampling weight
-	train_domain_weights = train_domain_weights / doremi.sampling_weights.to(train_domain_weights.device)
-	train_domain_weights = train_domain_weights / train_domain_weights.sum()
-	curr_domain_weights = train_domain_weights[inputs['domain_ids']].unsqueeze(-1).expand_as(pertoken_loss).detach()
-	curr_domain_weights = curr_domain_weights * token_mask
-	normalizer = curr_domain_weights.sum()
+    # compute the rescaled loss, divide by domain weights
+    # assume doing uniform sampling
+    curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
 
-	token_mask = token_mask.detach().type(pertoken_loss.dtype)
-	curr_domain_weights = curr_domain_weights / normalizer
-	loss = (pertoken_loss * curr_domain_weights.detach()).sum()
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()    
-        
-        metric_logger.update(loss=loss.item())
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+    loss = (loss * curr_domain_weights.detach()).sum()
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()    
+
+    metric_logger.update(loss=loss.item())
+    metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -208,9 +243,9 @@ def main(args, config):
         samplers = [None, None]
     
     train_loader, test_loader = create_loader(datasets,samplers,
-                                              batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
-                                              num_workers=[4,4],is_trains=[True, False], 
-                                              collate_fns=[vqa_collate_fn,None]) 
+                                            batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
+                                            num_workers=[4,4],is_trains=[True, False], 
+                                            collate_fns=[vqa_collate_fn,None]) 
     #### Model #### 
     print("Creating model")
     model = blip_vqa(args) 
@@ -219,13 +254,10 @@ def main(args, config):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module    
-    
-    # define your reference model here
-    if args.doremi_train:
-        reference_model = blip_vqa(args)
-        model.reference_model = reference_model
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
+    
+    doremi = Doremi(args)
 
     best = 0
     best_epoch = 0 
@@ -239,7 +271,7 @@ def main(args, config):
                 
             cosine_lr_schedule(optimizer, epoch, config['max_epoch'], config['init_lr'], config['min_lr'])
                 
-            train_stats = train(model, train_loader, optimizer, epoch, device) 
+            train_stats = train(model, train_loader, optimizer, doremi, epoch, device) 
 
         else:         
             break        
@@ -261,10 +293,7 @@ def main(args, config):
 
         dist.barrier()         
 
-    #TODO: how to do validation in instruct tuning
-    #vqa_result = evaluation(model_without_ddp, test_loader, device, config)        
-    #result_file = save_result(vqa_result, args.result_dir, 'vqa_result')  
-                      
+                  
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str)) 
@@ -285,6 +314,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_type', default="blip2_vicuna", type=str, choices=["blip2_vicuna", "blip2_t5"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
+    parser.add_argument('--gradient_accumulation_steps', default=100, help="accumulation steps for updating doremi domain weights")
+    parser.add_argument('--test_dummy_inputs', action='store_true')
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
@@ -296,4 +327,5 @@ if __name__ == '__main__':
         
     yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))    
     
-    main(args, config)
+    # main(args, config)
+    test_dummy_inputs
