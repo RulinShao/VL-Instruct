@@ -169,23 +169,23 @@ def train(model, data_loader, optimizer, doremi, epoch, device):
             doremi.perdomain_scores = []
             doremi.domain_ids = []
 	
-    # compute the rescaled loss, divide by domain weights
-    # assume doing uniform sampling
-    curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
+        # compute the rescaled loss, divide by domain weights
+        # assume doing uniform sampling
+        curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
 
-    loss = (loss * curr_domain_weights.detach()).sum()
+        loss = (loss * curr_domain_weights.detach()).sum()
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()    
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()    
 
-    metric_logger.update(loss=loss.item())
-    metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.update(loss=loss.item())
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger.global_avg())     
-    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
+        # gather the stats from all processes
+        metric_logger.synchronize_between_processes()
+        print("Averaged stats:", metric_logger.global_avg())     
+        return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
 
 
 @torch.no_grad()
