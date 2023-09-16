@@ -28,18 +28,16 @@ from utils import cosine_lr_schedule
 from data import create_dataset, create_sampler, create_loader
 from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
-
-domains = {
-    'ok_vqa': 9009, 'image_quality': 10000, 'VQA_attribute': 10000, 'image_text_selection': 10000, 'VQA_counting': 10000, 'wikihow_immediate_next_step_selection': 10000, 'VQA_scene_recognition': 10000, 'VQA_object_presence': 10000, 'wikihow_next_step': 10000, 'VQA_positional_reasoning': 10000, 'wikihow_text_image_step_order': 10000, 'question_image_match': 10000, 'visualgenome_vqa': 10000, 'ITM': 10000, 'VQA': 10000, 'VQA_object_recognition': 10000, 'wikihow_image_text_step_order': 10000, 'VQA_color': 10000, 'open-domain_VQA': 10000, 'VQAv2': 10000, 'VQA_sport_recognition': 10000, 'multimodal_factual_checking': 5477, 'VQA_activity_recognition': 3191, 'image_caption': 10000, 'VQA_sentiment_understanding': 1242, 'VQA_utility_affordance': 291
-}
+import pdb
+from data.variables import TASK_LIST
 
 class Doremi():
     def __init__(self, args):
         self.args = args
         self.reweight_eta = 1.0  # step size
-        self.reweight_eps = 1e-4  # smaoothing parameter
+        self.reweight_eps = 1e-4  # smoothing parameter
 
-        self.domain_list = domains.keys()
+        self.domain_list = TASK_LIST
         self.num_domains = len(self.domain_list)
         self.train_domain_weights = torch.ones(self.num_domains) / self.num_domains
         self.avg_train_domain_weights = torch.zeros_like(self.train_domain_weights)
@@ -63,7 +61,8 @@ class Doremi():
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-    def update_domain_weights(self,):
+    def update_domain_weights(self):
+        pdb.set_trace()
         train_domain_weights = self.read_weights()
 
         perdomain_scores = torch.zeros_like(self.train_domain_weights)
@@ -146,18 +145,14 @@ def train(model, data_loader, optimizer, doremi, epoch, device):
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50    
     
-    for i,(image, question, answer, reference_loss, domain_ids, weights, n) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        image, weights, reference_loss = image.to(device,non_blocking=True), weights.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True)      
+    
+    for i, (image, question, answer, domain_ids, reference_loss) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        image, reference_loss, domain_ids = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True), domain_ids.to(device, dtype=torch.long)
         
-        # testing dummy inputs
-        image = torch.randn((4, 3, 224, 224)).cuda()
-        question = ['What is in the image?'] * 4
-        answer = ['Random Pxiels'] * 4
-        domain_ids = [0, 1, 2, 3]
-        reference_loss = torch.tensor([0.123, 1.23, 0.98, 3.33])
 
         # doremi requires pertoken loss
-        loss = model(image, question, answer, train=True, n=n, weights=weights)        
+        loss = model(image, question, answer, train=True) 
+        # pdb.set_trace()       
         excess_loss = torch.maximum(loss - reference_loss, torch.tensor(0))
 
         doremi.perdomain_scores.append(torch.flatten(excess_loss.detach()))
@@ -171,7 +166,11 @@ def train(model, data_loader, optimizer, doremi, epoch, device):
 	
         # compute the rescaled loss, divide by domain weights
         # assume doing uniform sampling
+        # pdb.set_trace()
         curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
+        
+        if i % 10 == 0:
+            pdb.set_trace()
 
         loss = (loss * curr_domain_weights.detach()).sum()
 
@@ -252,7 +251,7 @@ def main(args, config):
     train_loader, test_loader = create_loader(datasets,samplers,
                                             batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
                                             num_workers=[4,4],is_trains=[True, False], 
-                                            collate_fns=[vqa_collate_fn,None]) 
+                                            collate_fns=[vqa_collate_fn,None])
     #### Model #### 
     print("Creating model")
     model = blip_vqa(args) 
@@ -321,8 +320,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_type', default="blip2_t5", type=str, choices=["blip2_vicuna", "blip2_t5"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
-    parser.add_argument('--gradient_accumulation_steps', default=100, help="accumulation steps for updating doremi domain weights")
-    parser.add_argument('--test_dummy_inputs', action='store_true')
+    parser.add_argument('--gradient_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
+    # parser.add_argument('--test_dummy_inputs', action='store_true')
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
@@ -334,5 +333,5 @@ if __name__ == '__main__':
         
     yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))    
     
-    # main(args, config)
-    test_dummy_inputs()
+    main(args, config)
+    # test_dummy_inputs()

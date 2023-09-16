@@ -7,7 +7,7 @@ from torch.nn import CrossEntropyLoss
 
 from lavis.models import load_model_and_preprocess
 from lavis.models.blip2_models.blip2 import Blip2Base, disabled_train
-
+import pdb
 
 pretrain_flant5xl_url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xl.pth'
 pretrain_vicuna7b_url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_vicuna7b.pth'
@@ -20,7 +20,7 @@ class BLIP2_VQA(Blip2Base):
                     model_type="blip2_vicuna",
                     train_llm=False,
                     train_qformer=True,
-                    doremi_train=False,
+                    doremi_train=True,
                  ):
         """
         Args:
@@ -52,15 +52,7 @@ class BLIP2_VQA(Blip2Base):
                 param.requires_grad = False
 
         self.doremi = doremi_train
-        
-        # we don't need it as we assume the reference loss have been computed offline
-        self.doremi = False
-        if self.doremi:
-            # update the reference model outside, not here
-            self.reference_model = None
-            self.ignore_index = -100
-            self.loss_fct = CrossEntropyLoss(reduction='mean', ignore_index=self.ignore_index)
-            self.pertoken_loss_fct = CrossEntropyLoss(reduction='none', ignore_index=self.ignore_index)
+
 
     
     def forward(self, image, question, answer=None, n=None, weights=None, train=True, inference='rank', k_test=128,
@@ -72,7 +64,18 @@ class BLIP2_VQA(Blip2Base):
                 "text_output": answer,
                 "prompt": None,
             }
-            return self.model(samples)['loss']
+            if self.doremi:
+                output = self.model(samples)
+                loss_fct = CrossEntropyLoss(reduction='none', ignore_index=-100)
+                logits = output.logits
+                labels = output.labels
+                # pdb.set_trace()
+                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+                loss = loss.view(image.shape[0],-1)
+                loss = torch.mean(loss, -1)
+            else:
+                loss = self.model(samples).loss
+            return loss
         else:
             samples = {
                 "image": image,

@@ -10,15 +10,10 @@ import pandas as pd
 
 from torchvision.datasets.utils import download_url
 from .templates_5 import build_instruction
+from .variables import *
+import pdb
 
-SUPPORT_TASK_LIST = ['open-domain_VQA', 'text_legibility', 'image_quality', 'if_region_overlap', 'visual_object_region', 'region_generation', 'descriptive_object_region_select', 'visual_subject_region', 'object_grounding', 'object_region_selection', 'object_region_match', 'visual_object_identification', 'VQA_attribute', 'image_text_selection', 'GC_selection', 'VQA_counting', 'region_area', 'wikihow_immediate_next_step_selection', 'VQA_scene_recognition', 'descriptive_object_region_generate', 'text_type', 'VQA_object_presence', 'wikihow_next_step', 'object_relationship', 'VQA_positional_reasoning', 'wikihow_text_image_step_order', 'question_image_match', 'region_text_match', 'GC', 'ITM', 'VQA', 'object_match', 'VQA_object_recognition', 'text_localization', 'object_description_generate', 'wikihow_image_text_step_order', 'select_overlap_least_region', 'visual_attribute', 'VQA_color', 'missing_object_selection', 'visual_subject_identification', 'select_overlap_most_region', 'VQA_sport_recognition', 'multimodal_factual_checking', 'VG', 'region_caption_match', 'VQA_activity_recognition', 'region_object_selection', 'select_overlaped_region', 'image_caption', 'VQA_sentiment_understanding', 'select_nonoverlaped_region', 'VG_selection', 'VQA_utility_affordance']
-NOT_SUPPORT_TASK_LIST = ['region_object_selection', 'select_overlaped_region', 'descriptive_object_region_select', 'missing_object_selection']
-SUPPORT_TASK_LIST = [x for x in SUPPORT_TASK_LIST if not x in NOT_SUPPORT_TASK_LIST]
 
-# Define domain id mapping for doremi
-VL_DOMAINS = ['llava', 'mini-gpt4', 'macaw', 'lamm', ]
-DOMAIN_TO_IDX = {
-    name: idx for idx, name in enumerate(VL_DOMAINS)}
 
 class vqa_dataset(Dataset):
     def __init__(self, transform, ann_root, vqa_root, vg_root, train_files=[], split="train"):
@@ -29,9 +24,9 @@ class vqa_dataset(Dataset):
         self.vg_root = vg_root
         
         if self.split == "train":
-            self.data_type = ['llava', 'mini-gpt4', 'macaw', 'lamm']
+            self.data_type = ['vison-flan']
         elif self.split == "test":
-            self.data_type = ['aok_vqa', 'aok_vqa_rationale', 'memecaps', 'ok_vqa', 'science_qa', 'text_vqa', 'textcaps', 'visdial', 'winoground']
+            self.data_type = []
         self.annotations = []
 
         if 'llava' in self.data_type:
@@ -92,6 +87,17 @@ class vqa_dataset(Dataset):
                 ann.update({'data_type': 'my-dataset', 'img_dir': img_path})
 
             self.annotations += annotation
+        elif 'vison-flan' in self.data_type:
+            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/vision-flan.json'
+            vision_flan_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/dataset/'
+            multiinstruct_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images/'
+            raw_annotation = json.load(open(ann_paths,'r'))
+            annotation = []
+            for ann in raw_annotation:    
+                ann['data_type'] = 'vision-flan'
+                ann['img_dir'] = vision_flan_img_path if ann['id'].startswith('vision-flan') else multiinstruct_img_path
+                annotation.append(ann)
+            self.annotations += annotation
         else:
             assert self.split == 'test'
             data_dir = '/mnt_out/rlshao/data/multiInstruct_v1.0/eval'
@@ -102,8 +108,7 @@ class vqa_dataset(Dataset):
                 for ann in annotation:
                     ann.update({'image_path': os.path.join(f'{data_dir}/eval_images', ann['image_path'].strip('./')), 'data_type': task_name})
                 self.annotations += annotation
-       
-
+        # pdb.set_trace()
         random.shuffle(self.annotations)
         
     def __len__(self):
@@ -151,6 +156,19 @@ class vqa_dataset(Dataset):
 
             instruction, target = build_instruction(**ann)
             unique_id = ann['unique_id']
+        elif data_type == 'vision-flan':
+            """
+            {"id": "vision-flan_coco+image_classification_appliance+13368", "image": "alok_checked/sampled_dataset/coco+image_classification_appliance/images/coco+image_classification_appliance_728_000000124349.jpg", "task_name": "coco+image_classification_appliance", "conversations": [{"from": "human", "value": "Given an image of a common electronic appliance from around the house, identify the type of object it is. It could be an appliance that is commonly used in the kitchen to cook or store food.\nOptions: (a) This image contains an oven (b) This image contains a refrigerator (c) This image contains a sink (d) This image contains a toaster (e) This image contains a microwave\n<image>"}, {"from": "gpt", "value": "(e) This image contains a microwave"}]}
+            """
+            image_path = os.path.join(ann['img_dir'], ann['image'])
+            image = Image.open(image_path).convert('RGB')
+            image = self.transform(image)
+
+            instruction = ann['conversations'][0]['value']
+            target = ann['conversations'][1]['value']
+            unique_id = ann['id']
+            task_name = ann['task_name']
+            
         else:
             image_path = ann['image_path']
             image = Image.open(image_path).convert('RGB')
@@ -172,21 +190,26 @@ class vqa_dataset(Dataset):
             question = instruction
             answers = [target]
             weights = [0.2]
-            domain_id = DOMAIN_TO_IDX[data_type]
+            reference_loss = [0.1]
+            try:
+                domain_id = TASK_TO_IDX[task_name]
+            except:
+                pdb.set_trace()
 
-            return image, question, answers, weights, domain_id
+            return image, question, answers, weights, reference_loss, domain_id
         
         
 def vqa_collate_fn(batch):
-    image_list, question_list, answer_list, weight_list, n, domain_ids = [], [], [], [], [], []
-    for image, question, answer, weights, domain_id in batch:
+    image_list, question_list, answer_list, reference_loss_list, domain_ids, weight_list, n = [], [], [], [], [], [], []
+    for image, question, answer, weights, reference_loss, domain_id in batch:
         image_list.append(image)
         question_list.append(question)
-        weight_list += weights       
+        # weight_list += weights
         answer_list += answer
-        n.append(len(answer))
+        reference_loss_list += reference_loss
+        # n.append(len(answer))
         domain_ids.append(domain_id)
-    return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(weight_list), n, domian_ids        
+    return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(domain_ids), torch.Tensor(reference_loss_list)        
 
 def check_lamm_image():
     bad_images = ['bamboo_images/2880700382_2c2817c6c5_c.jpg']

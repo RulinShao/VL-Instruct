@@ -28,6 +28,7 @@ from utils import cosine_lr_schedule
 from data import create_dataset, create_sampler, create_loader
 from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
+import pdb
 
 
 def train(model, data_loader, optimizer, epoch, device):
@@ -41,10 +42,10 @@ def train(model, data_loader, optimizer, epoch, device):
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50    
     
-    for i,(image, question, answer, weights, n) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for i,(image, question, answer, weights, n, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         image, weights = image.to(device,non_blocking=True), weights.to(device,non_blocking=True)      
 
-        loss = model(image, question, answer, train=True, n=n, weights=weights)        
+        loss = model(image, question, answer, train=True, n=None, weights=None)        
         
         optimizer.zero_grad()
         loss.backward()
@@ -122,7 +123,7 @@ def main(args, config):
     
     train_loader, test_loader = create_loader(datasets,samplers,
                                               batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
-                                              num_workers=[4,4],is_trains=[True, False], 
+                                              num_workers=[0,0],is_trains=[True, False], 
                                               collate_fns=[vqa_collate_fn,None]) 
     #### Model #### 
     print("Creating model")
