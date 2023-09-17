@@ -72,7 +72,10 @@ class Doremi():
 
         for domain_id in range(self.num_domains):
             indices = torch.where(_domain_ids == domain_id)
-            perdomain_scores[domain_id] = torch.mean(_perdomain_scores[indices])
+            if len(indices[0]) > 0:
+                # no update if the domain isn't presented in current batch
+                # another solution: consider sampling the batch according to domain weights
+                perdomain_scores[domain_id] = torch.mean(_perdomain_scores[indices])
 
 
         # update domain weights
