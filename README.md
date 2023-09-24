@@ -15,7 +15,7 @@ pip install -e .
 Modify the data paths in the personalized dataloader in [data/vqa_dataset.py](https://github.com/RulinShao/VL-Instruct/blob/main/data/vqa_dataset.py)
 
 
-### Train BLIP2-FlanT5-xxl
+### Train BLIP2-FlanT5-xl
 ```
 python -m torch.distributed.run --nproc_per_node=8 train_vqa.py --model_type blip2_t5 --train_qformer
 ```
@@ -30,3 +30,5 @@ python -m torch.distributed.run --nproc_per_node=8 train_vqa.py --model_type bli
 ```
 python -m torch.distributed.run --nproc_per_node=8 train_vqa.py --model_type blip2_vicuna --train_qformer --train_llm
 ```
+
+export TRANSFORMERS_CACHE=/projects/nlp_lab/zhiyang/.cache/

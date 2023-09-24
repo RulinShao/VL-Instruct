@@ -29,36 +29,107 @@ from data import create_dataset, create_sampler, create_loader
 from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
 import pdb
+from data.variables import TASK_LIST
+
+class Doremi():
+    def __init__(self, args):
+        self.args = args
+        self.reweight_eta = 1.0  # step size
+        self.reweight_eps = 1e-4  # smoothing parameter
+
+        self.domain_list = TASK_LIST
+        self.num_domains = len(self.domain_list)
+        self.train_domain_weights = torch.ones(self.num_domains) / self.num_domains
+        self.avg_train_domain_weights = torch.zeros_like(self.train_domain_weights)
+        
+        self.update_counter = 0
+        self.perdomain_scores = []
+        self.domain_ids = []
+
+    def write_weights(self, weights):
+        self.update_counter += 1
+        self.train_domain_weights[:] = weights
+        self.avg_train_domain_weights += weights
+    
+    def get_avg_weights(self,):
+        return self.avg_train_domain_weights / self.update_counter
+    
+    def read_weights(self):
+        return self.train_domain_weights.clone()
+
+    def set_attributes(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def update_domain_weights(self):
+        # pdb.set_trace()
+        train_domain_weights = self.read_weights()
+
+        perdomain_scores = torch.zeros_like(self.train_domain_weights)
+
+        _perdomain_scores = torch.flatten(torch.cat(self.perdomain_scores, dim=0))
+        _domain_ids = torch.flatten(torch.cat(self.domain_ids, dim=0))
+
+        for domain_id in range(self.num_domains):
+            indices = torch.where(_domain_ids == domain_id)
+            if len(indices[0]) > 0:
+                # no update if the domain isn't presented in current batch
+                # another solution: consider sampling the batch according to domain weights
+                perdomain_scores[domain_id] = torch.mean(_perdomain_scores[indices])
 
 
-def train(model, data_loader, optimizer, epoch, device):
+        # update domain weights
+        log_new_train_domain_weights = torch.log(train_domain_weights) + self.reweight_eta * perdomain_scores
+        
+        # renormalize and smooth domain weights
+        new_train_domain_weights = nn.functional.softmax(log_new_train_domain_weights, dim=0)
+        train_domain_weights = (1-self.reweight_eps) * new_train_domain_weights + self.reweight_eps / len(new_train_domain_weights)
+        
+        self.write_weights(train_domain_weights)
+    
+    def get_train_domain_weights(self, domain_ids):
+        train_domain_weights = self.train_domain_weights.to(domain_ids.device)
+        train_domain_weights = train_domain_weights / train_domain_weights.sum()
+        curr_domain_weights = train_domain_weights[domain_ids]
+        return curr_domain_weights / sum(curr_domain_weights)
+
+@torch.no_grad()
+def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
     # train
-    model.train()  
+    model.eval()  
     
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('loss', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
 
     header = 'Train Epoch: [{}]'.format(epoch)
-    print_freq = 50    
+    print_freq = 10    
     
-    for i,(image, question, answer, weights, n, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        image, weights = image.to(device,non_blocking=True), weights.to(device,non_blocking=True)      
+    all_loss = {}
+    for i, (ids, image, question, answer, domain_ids, reference_loss) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        image, reference_loss, domain_ids = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True), domain_ids.to(device, dtype=torch.long)
+        
 
-        loss = model(image, question, answer, train=True, n=None, weights=None)        
+        # doremi requires pertoken loss
+        with torch.inference_mode():
+            instance_loss = model(image, question, answer, train=True)
+            # pdb.set_trace()
+            loss = torch.mean(instance_loss)
+            instance_loss = instance_loss.detach().tolist()
+            for id_, ref_loss in zip(ids, instance_loss):
+                assert not id_ in all_loss
+                all_loss[id_] = ref_loss
+            # pdb.set_trace()
         
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()    
-        
+
         metric_logger.update(loss=loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger.global_avg())     
-    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
-
+    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}, all_loss
 
 @torch.no_grad()
 def evaluation(model, data_loader, device, config) :
@@ -121,25 +192,30 @@ def main(args, config):
     else:
         samplers = [None, None]
     
-    train_loader, test_loader = create_loader(datasets,samplers,
-                                              batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
-                                              num_workers=[0,0],is_trains=[True, False], 
-                                              collate_fns=[vqa_collate_fn,None]) 
+    train_loader, _ = create_loader(datasets,samplers,
+                                            batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
+                                            num_workers=[4,4],is_trains=[True, False], 
+                                            collate_fns=[vqa_collate_fn,None])
     #### Model #### 
     print("Creating model")
     model = blip_vqa(args) 
-    model = model.to(device)   
+    model = model.to(device)       
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module    
-    
+
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
+    
+    doremi = Doremi(args)
 
     best = 0
     best_epoch = 0 
-       
-    print("Start training")
+    
+    if args.doremi:
+        print("Start Doremi training!")
+    else:
+        print("Start training!")
     start_time = time.time()    
     for epoch in range(0, config['max_epoch']):
         if not args.evaluate:        
@@ -148,7 +224,8 @@ def main(args, config):
                 
             cosine_lr_schedule(optimizer, epoch, config['max_epoch'], config['init_lr'], config['min_lr'])
                 
-            train_stats = train(model, train_loader, optimizer, epoch, device) 
+            train_stats, all_loss = train_doremi(model, train_loader, optimizer, doremi, epoch, device)
+            # pdb.set_trace()
 
         else:         
             break        
@@ -158,22 +235,17 @@ def main(args, config):
                          'epoch': epoch,
                         }                
             with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
-                f.write(json.dumps(log_stats) + "\n")                        
+                f.write(json.dumps(log_stats) + "\n")
+            
+            with open(os.path.join(args.output_dir, "reference_loss.json"),"w") as fout:
+                json.dump(all_loss, fout)
                     
-            if epoch == 2 or epoch == 9:
-                save_obj = {
-                    'model': model_without_ddp.state_dict(),
-                    'config': config,
-                    'epoch': epoch,
-                }
-                torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_%02d.pth'%epoch))  
+              
 
-        dist.barrier()         
+        dist.barrier()
+        break       
 
-    #TODO: how to do validation in instruct tuning
-    #vqa_result = evaluation(model_without_ddp, test_loader, device, config)        
-    #result_file = save_result(vqa_result, args.result_dir, 'vqa_result')  
-                      
+                  
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str)) 
@@ -183,26 +255,29 @@ def main(args, config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/vqa.yaml') 
-    parser.add_argument('--output_dir', default='output/VQA')
+    parser.add_argument('--output_dir', default='temp')
     parser.add_argument('--evaluate', action='store_true')      
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')    
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-    parser.add_argument('--distributed', default=True, type=bool)
+    parser.add_argument('--distributed', default=False, type=bool)
     parser.add_argument('--pretrained', default=None, type=str, help='path to the saved ckpt')
-    parser.add_argument('--model_type', default="blip2_vicuna", type=str, choices=["blip2_vicuna", "blip2_t5"])
+    parser.add_argument('--model_type', default="pretrain_flant5xl", type=str, choices=["pretrain_flant5xxl", "pretrain_flant5xl", "vicuna7b"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
+    parser.add_argument('--gradient_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
+    parser.add_argument('--doremi', action='store_true', help='train model with doremi')
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
 
+    args.output_dir = os.path.join('checkpoints', args.output_dir)
     args.result_dir = os.path.join(args.output_dir, 'result')
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     Path(args.result_dir).mkdir(parents=True, exist_ok=True)
         
-    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))    
+    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))     
     
     main(args, config)

@@ -88,7 +88,7 @@ class vqa_dataset(Dataset):
 
             self.annotations += annotation
         elif 'vison-flan' in self.data_type:
-            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/vision-flan.json'
+            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/dataset/VL-Instruct/vision-flan_unique_id.json'
             vision_flan_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/dataset/'
             multiinstruct_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images/'
             raw_annotation = json.load(open(ann_paths,'r'))
@@ -160,6 +160,7 @@ class vqa_dataset(Dataset):
             """
             {"id": "vision-flan_coco+image_classification_appliance+13368", "image": "alok_checked/sampled_dataset/coco+image_classification_appliance/images/coco+image_classification_appliance_728_000000124349.jpg", "task_name": "coco+image_classification_appliance", "conversations": [{"from": "human", "value": "Given an image of a common electronic appliance from around the house, identify the type of object it is. It could be an appliance that is commonly used in the kitchen to cook or store food.\nOptions: (a) This image contains an oven (b) This image contains a refrigerator (c) This image contains a sink (d) This image contains a toaster (e) This image contains a microwave\n<image>"}, {"from": "gpt", "value": "(e) This image contains a microwave"}]}
             """
+            instance_id = ann['id']
             image_path = os.path.join(ann['img_dir'], ann['image'])
             image = Image.open(image_path).convert('RGB')
             image = self.transform(image)
@@ -196,12 +197,13 @@ class vqa_dataset(Dataset):
             except:
                 pdb.set_trace()
 
-            return image, question, answers, weights, reference_loss, domain_id
+            return instance_id, image, question, answers, weights, reference_loss, domain_id
         
         
 def vqa_collate_fn(batch):
-    image_list, question_list, answer_list, reference_loss_list, domain_ids, weight_list, n = [], [], [], [], [], [], []
-    for image, question, answer, weights, reference_loss, domain_id in batch:
+    id_list, image_list, question_list, answer_list, reference_loss_list, domain_ids, weight_list, n = [], [], [], [], [], [], [], []
+    for _id, image, question, answer, weights, reference_loss, domain_id in batch:
+        id_list.append(_id)
         image_list.append(image)
         question_list.append(question)
         # weight_list += weights
@@ -209,7 +211,7 @@ def vqa_collate_fn(batch):
         reference_loss_list += reference_loss
         # n.append(len(answer))
         domain_ids.append(domain_id)
-    return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(domain_ids), torch.Tensor(reference_loss_list)        
+    return id_list, torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(domain_ids), torch.Tensor(reference_loss_list)        
 
 def check_lamm_image():
     bad_images = ['bamboo_images/2880700382_2c2817c6c5_c.jpg']

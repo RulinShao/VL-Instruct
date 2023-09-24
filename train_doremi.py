@@ -62,7 +62,7 @@ class Doremi():
             setattr(self, k, v)
 
     def update_domain_weights(self):
-        pdb.set_trace()
+        # pdb.set_trace()
         train_domain_weights = self.read_weights()
 
         perdomain_scores = torch.zeros_like(self.train_domain_weights)
@@ -137,7 +137,7 @@ def test_dummy_inputs():
     
 
 
-def train(model, data_loader, optimizer, doremi, epoch, device):
+def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
     # train
     model.train()  
     
@@ -172,8 +172,6 @@ def train(model, data_loader, optimizer, doremi, epoch, device):
         # pdb.set_trace()
         curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
         
-        if i % 10 == 0:
-            pdb.set_trace()
 
         loss = (loss * curr_domain_weights.detach()).sum()
 
@@ -184,11 +182,38 @@ def train(model, data_loader, optimizer, doremi, epoch, device):
         metric_logger.update(loss=loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger.global_avg())     
-        return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger.global_avg())     
+    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
 
+def train(model, data_loader, optimizer, epoch, device):
+    # train
+    model.train()  
+    
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('loss', utils.SmoothedValue(window_size=1, fmt='{value:.4f}'))
+
+    header = 'Train Epoch: [{}]'.format(epoch)
+    print_freq = 50    
+    
+    for i,(image, question, answer, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        image = image.to(device,non_blocking=True)     
+
+        loss = model(image, question, answer, train=True)        
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()    
+        
+        metric_logger.update(loss=loss.item())
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger.global_avg())     
+    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
 
 @torch.no_grad()
 def evaluation(model, data_loader, device, config) :
@@ -251,7 +276,7 @@ def main(args, config):
     else:
         samplers = [None, None]
     
-    train_loader, test_loader = create_loader(datasets,samplers,
+    train_loader, _ = create_loader(datasets,samplers,
                                             batch_size=[config['batch_size_train'], config['batch_size_test']], # Rulin TODO bachify test
                                             num_workers=[4,4],is_trains=[True, False], 
                                             collate_fns=[vqa_collate_fn,None])
@@ -270,8 +295,11 @@ def main(args, config):
 
     best = 0
     best_epoch = 0 
-       
-    print("Start training")
+    
+    if args.doremi:
+        print("Start Doremi training!")
+    else:
+        print("Start training!")
     start_time = time.time()    
     for epoch in range(0, config['max_epoch']):
         if not args.evaluate:        
@@ -280,7 +308,7 @@ def main(args, config):
                 
             cosine_lr_schedule(optimizer, epoch, config['max_epoch'], config['init_lr'], config['min_lr'])
                 
-            train_stats = train(model, train_loader, optimizer, doremi, epoch, device) 
+            train_stats = train_doremi(model, train_loader, optimizer, doremi, epoch, device) if args.doremi else train(model, train_loader, optimizer, epoch, device)
 
         else:         
             break        
@@ -292,11 +320,12 @@ def main(args, config):
             with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
                 f.write(json.dumps(log_stats) + "\n")                        
                     
-            if epoch == 2 or epoch == 9:
+            if epoch == 2 or epoch == 0 or epoch == 1:
                 save_obj = {
                     'model': model_without_ddp.state_dict(),
                     'config': config,
                     'epoch': epoch,
+                    'doremi': doremi if args.doremi else None
                 }
                 torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_%02d.pth'%epoch))  
 
@@ -312,7 +341,7 @@ def main(args, config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/vqa.yaml') 
-    parser.add_argument('--output_dir', default='output/VQA')
+    parser.add_argument('--output_dir', default='temp')
     parser.add_argument('--evaluate', action='store_true')      
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--seed', default=42, type=int)
@@ -320,21 +349,21 @@ if __name__ == '__main__':
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--pretrained', default=None, type=str, help='path to the saved ckpt')
-    parser.add_argument('--model_type', default="blip2_t5", type=str, choices=["blip2_vicuna", "blip2_t5"])
+    parser.add_argument('--model_type', default="pretrain_flant5xl", type=str, choices=["pretrain_flant5xxl", "pretrain_flant5xl", "vicuna7b"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
     parser.add_argument('--gradient_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
-    # parser.add_argument('--test_dummy_inputs', action='store_true')
+    parser.add_argument('--doremi', action='store_true', help='train model with doremi')
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
 
+    args.output_dir = os.path.join('checkpoints', args.output_dir)
     args.result_dir = os.path.join(args.output_dir, 'result')
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     Path(args.result_dir).mkdir(parents=True, exist_ok=True)
         
-    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))    
+    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))     
     
     main(args, config)
-    # test_dummy_inputs()
