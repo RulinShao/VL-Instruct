@@ -16,12 +16,11 @@ import pdb
 
 
 class vqa_dataset(Dataset):
-    def __init__(self, transform, ann_root, vqa_root, vg_root, train_files=[], split="train"):
+    def __init__(self, transform,  args=None, train_files=[], split="train"):
         self.split = split        
 
         self.transform = transform
-        self.vqa_root = vqa_root
-        self.vg_root = vg_root
+        self.args = args
         
         if self.split == "train":
             self.data_type = ['vison-flan']
@@ -88,15 +87,25 @@ class vqa_dataset(Dataset):
 
             self.annotations += annotation
         elif 'vison-flan' in self.data_type:
-            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/dataset/VL-Instruct/vision-flan_unique_id.json'
+            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/VL-Instruct/dataset/vision-flan_unique_id.json'
             vision_flan_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/dataset/'
             multiinstruct_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images/'
             raw_annotation = json.load(open(ann_paths,'r'))
+            if not args.reference_loss_path is None:
+                reference_loss = json.load(open(args.reference_loss_path,'r'))
+                
             annotation = []
             for ann in raw_annotation:    
                 ann['data_type'] = 'vision-flan'
                 ann['img_dir'] = vision_flan_img_path if ann['id'].startswith('vision-flan') else multiinstruct_img_path
+                if args.reference_loss_path:
+                    if not ann['id'] in reference_loss:
+                        continue
+                    reference_loss[ann['id']] = reference_loss[ann['id']][:args.max_txt_len] if len(reference_loss[ann['id']]) >= args.max_txt_len else reference_loss[ann['id']] + [0.0] * (args.max_txt_len - len(reference_loss[ann['id']]))
+                    ann['reference_loss'] = reference_loss[ann['id']]
                 annotation.append(ann)
+            if not len(annotation) == len(raw_annotation):
+                print(f"#### warining lossing {len(raw_annotation) - len(annotation)} instance during processing")
             self.annotations += annotation
         else:
             assert self.split == 'test'
@@ -108,7 +117,6 @@ class vqa_dataset(Dataset):
                 for ann in annotation:
                     ann.update({'image_path': os.path.join(f'{data_dir}/eval_images', ann['image_path'].strip('./')), 'data_type': task_name})
                 self.annotations += annotation
-        # pdb.set_trace()
         random.shuffle(self.annotations)
         
     def __len__(self):
@@ -118,6 +126,7 @@ class vqa_dataset(Dataset):
         ann = self.annotations[index]
         data_type = ann['data_type']
         
+        reference_loss = None
         if data_type == 'llava' or data_type == 'lamm':
             if data_type == 'llava':
                 image_path = os.path.join(ann['img_dir'], ann['image'])
@@ -169,7 +178,7 @@ class vqa_dataset(Dataset):
             target = ann['conversations'][1]['value']
             unique_id = ann['id']
             task_name = ann['task_name']
-            
+            reference_loss = [ann.get('reference_loss',0.0)]
         else:
             image_path = ann['image_path']
             image = Image.open(image_path).convert('RGB')
@@ -191,7 +200,8 @@ class vqa_dataset(Dataset):
             question = instruction
             answers = [target]
             weights = [0.2]
-            reference_loss = [0.1]
+            if not reference_loss:
+                reference_loss = [0.1]
             try:
                 domain_id = TASK_TO_IDX[task_name]
             except:
@@ -211,6 +221,7 @@ def vqa_collate_fn(batch):
         reference_loss_list += reference_loss
         # n.append(len(answer))
         domain_ids.append(domain_id)
+    # pdb.set_trace()
     return id_list, torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(domain_ids), torch.Tensor(reference_loss_list)        
 
 def check_lamm_image():

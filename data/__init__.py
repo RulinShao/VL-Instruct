@@ -11,7 +11,7 @@ from data.nlvr_dataset import nlvr_dataset
 from data.pretrain_dataset import pretrain_dataset
 # from transform.randaugment import RandomAugment
 
-def create_dataset(dataset, config, min_scale=0.5):
+def create_dataset(dataset, config, args=None, min_scale=0.5):
     
     normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 
@@ -63,8 +63,8 @@ def create_dataset(dataset, config, min_scale=0.5):
         return train_dataset, val_dataset, test_dataset     
     
     elif dataset=='vqa': 
-        train_dataset = vqa_dataset(transform_blip2, None, None, None, train_files = None, split='train') 
-        test_dataset = vqa_dataset(transform_blip2, None, None, None, split='test')
+        train_dataset = vqa_dataset(transform_blip2, args=args, train_files = None, split='train') 
+        test_dataset = vqa_dataset(transform_blip2, args=args, split='test')
         return train_dataset, test_dataset
     
     elif dataset=='nlvr': 

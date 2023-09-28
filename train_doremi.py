@@ -29,7 +29,8 @@ from data import create_dataset, create_sampler, create_loader
 from data.vqa_dataset import vqa_collate_fn
 from data.utils import save_result
 import pdb
-from data.variables import TASK_LIST
+from data.variables import TASK_LIST, TASK_TO_IDX
+from torch.utils.tensorboard import SummaryWriter
 
 class Doremi():
     def __init__(self, args):
@@ -67,17 +68,20 @@ class Doremi():
 
         perdomain_scores = torch.zeros_like(self.train_domain_weights)
 
+        # print(len(self.perdomain_scores))
         _perdomain_scores = torch.flatten(torch.cat(self.perdomain_scores, dim=0))
         _domain_ids = torch.flatten(torch.cat(self.domain_ids, dim=0))
 
         for domain_id in range(self.num_domains):
             indices = torch.where(_domain_ids == domain_id)
+            # pdb.set_trace()
             if len(indices[0]) > 0:
                 # no update if the domain isn't presented in current batch
                 # another solution: consider sampling the batch according to domain weights
                 perdomain_scores[domain_id] = torch.mean(_perdomain_scores[indices])
-
-
+        
+        # dist.all_reduce(perdomain_scores.contiguous(), op=ReduceOp.SUM)/torch.distributed.get_world_size
+        # pdb.set_trace()
         # update domain weights
         log_new_train_domain_weights = torch.log(train_domain_weights) + self.reweight_eta * perdomain_scores
         
@@ -92,6 +96,10 @@ class Doremi():
         train_domain_weights = train_domain_weights / train_domain_weights.sum()
         curr_domain_weights = train_domain_weights[domain_ids]
         return curr_domain_weights / sum(curr_domain_weights)
+    
+    def print_domain_weights(self):
+        for domain, weight in zip(TASK_LIST, self.train_domain_weights):
+            print(domain, weight)
 
 
 def test_dummy_inputs():
@@ -137,7 +145,7 @@ def test_dummy_inputs():
     
 
 
-def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
+def train_doremi(model, data_loader, optimizer, doremi, epoch, device, writer=None):
     # train
     model.train()  
     
@@ -149,21 +157,27 @@ def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
     print_freq = 50    
     
     
-    for i, (image, question, answer, domain_ids, reference_loss) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for i, (_, image, question, answer, domain_ids, reference_loss) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         image, reference_loss, domain_ids = image.to(device,non_blocking=True), reference_loss.to(device,non_blocking=True), domain_ids.to(device, dtype=torch.long)
         
 
         # doremi requires pertoken loss
-        loss = model(image, question, answer, train=True) 
-        # pdb.set_trace()       
+        loss, num_tokens = model(image, question, answer, train=True)
+        # pdb.set_trace()
+        loss = torch.sum(loss, 1) / num_tokens
+        reference_loss = torch.sum(reference_loss, 1) / num_tokens
         excess_loss = torch.maximum(loss - reference_loss, torch.tensor(0))
 
         doremi.perdomain_scores.append(torch.flatten(excess_loss.detach()))
         doremi.domain_ids.append(torch.flatten(domain_ids.detach()))
 
-        if len(doremi.perdomain_scores) == args.gradient_accumulation_steps:
+        if len(doremi.perdomain_scores) == args.doremi_accumulation_steps:
             # update domain weights
             doremi.update_domain_weights()
+            # doremi.print_domain_weights()
+            if writer:
+                for domain, weight in zip(TASK_LIST, doremi.train_domain_weights):
+                    writer.add_scalar(domain, weight, i)
             doremi.perdomain_scores = []
             doremi.domain_ids = []
 	
@@ -172,7 +186,7 @@ def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
         # pdb.set_trace()
         curr_domain_weights = doremi.get_train_domain_weights(domain_ids)
         
-
+        # pdb.set_trace()
         loss = (loss * curr_domain_weights.detach()).sum()
 
         optimizer.zero_grad()
@@ -185,7 +199,7 @@ def train_doremi(model, data_loader, optimizer, doremi, epoch, device):
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger.global_avg())     
-    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
+    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}
 
 def train(model, data_loader, optimizer, epoch, device):
     # train
@@ -198,7 +212,7 @@ def train(model, data_loader, optimizer, epoch, device):
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50    
     
-    for i,(image, question, answer, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for i,(_, image, question, answer, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         image = image.to(device,non_blocking=True)     
 
         loss = model(image, question, answer, train=True)        
@@ -265,9 +279,11 @@ def main(args, config):
     random.seed(seed)
     cudnn.benchmark = True
     
+    writer = SummaryWriter(args.output_dir)
+    
     #### Dataset #### 
     print("Creating vqa datasets")
-    datasets = create_dataset('vqa', config)   
+    datasets = create_dataset('vqa', config, args=args)   
     
     if args.distributed:
         num_tasks = utils.get_world_size()
@@ -308,7 +324,7 @@ def main(args, config):
                 
             cosine_lr_schedule(optimizer, epoch, config['max_epoch'], config['init_lr'], config['min_lr'])
                 
-            train_stats = train_doremi(model, train_loader, optimizer, doremi, epoch, device) if args.doremi else train(model, train_loader, optimizer, epoch, device)
+            train_stats = train_doremi(model, train_loader, optimizer, doremi, epoch, device, writer=writer) if args.doremi else train(model, train_loader, optimizer, epoch, device)
 
         else:         
             break        
@@ -352,14 +368,19 @@ if __name__ == '__main__':
     parser.add_argument('--model_type', default="pretrain_flant5xl", type=str, choices=["pretrain_flant5xxl", "pretrain_flant5xl", "vicuna7b"])
     parser.add_argument('--train_llm', action='store_true', help='set the llm trainable during training')
     parser.add_argument('--train_qformer', action='store_true', help='set the qformer trainable during training')
-    parser.add_argument('--gradient_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
+    parser.add_argument('--doremi_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
     parser.add_argument('--doremi', action='store_true', help='train model with doremi')
+    parser.add_argument('--reference_loss_path', default=None, help="the reference loss to use when using doremi")
+    parser.add_argument('--max_txt_len', default=32, help="maximum text length during traning")
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
 
     args.output_dir = os.path.join('checkpoints', args.output_dir)
     args.result_dir = os.path.join(args.output_dir, 'result')
+    if args.reference_loss_path:
+        args.reference_loss_path = os.path.join('/projects/nlp_lab/zhiyang/phd4_projects/VL-Instruct/checkpoints',args.reference_loss_path)
+    args.doremi_accumulation_steps = int(args.doremi_accumulation_steps)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     Path(args.result_dir).mkdir(parents=True, exist_ok=True)

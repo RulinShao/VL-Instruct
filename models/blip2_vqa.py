@@ -21,6 +21,7 @@ class BLIP2_VQA(Blip2Base):
                     model_type="blip2_vicuna",
                     train_llm=False,
                     train_qformer=True,
+                    max_txt_len=32,
                     doremi=True,
                  ):
         """
@@ -39,7 +40,9 @@ class BLIP2_VQA(Blip2Base):
             self.model = self.model.to(device)
         else:
             self.model, self.vis_processors, _ = load_model_and_preprocess(name=model_name, model_type=model_type, is_eval=evaluate, device=device)  # hard-coded in lavis to use pretrain ckpt
-            self.model.max_txt_len = 64
+            self.model.max_txt_len = max_txt_len
+            if model_type is 'blip2_vicuna':
+                self.model.qformer_text_input = False
 
         if train_llm and model_name == "blip2_vicuna_instruct":
             for name, param in self.model.llm_model.named_parameters():
@@ -62,7 +65,6 @@ class BLIP2_VQA(Blip2Base):
                 "text_output": answer,
                 "prompt": None,
             }
-            # pdb.set_trace()
             if self.doremi:
                 output = self.model(samples)
                 loss_fct = CrossEntropyLoss(reduction='none', ignore_index=-100)
@@ -71,10 +73,12 @@ class BLIP2_VQA(Blip2Base):
                 # pdb.set_trace()
                 loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
                 loss = loss.view(image.shape[0],-1)
-                # loss = torch.mean(loss, -1)
+                num_tokens = torch.where(labels==-100, 0.0, 1.0)
+                num_tokens = torch.sum(num_tokens, 1)
+                return loss, num_tokens
             else:
                 loss = self.model(samples).loss
-            return loss
+                return loss
         else:
             samples = {
                 "image": image,
@@ -89,7 +93,9 @@ def blip2_vqa(args):
         model_type=args.model_type, #"pretrain_flant5xxl" "pretrain_flant5xl" "vicuna7b"
         train_llm=args.train_llm,
         train_qformer=args.train_qformer,
-        doremi=args.doremi
+        doremi=args.doremi,
+        max_txt_len=args.max_txt_len
+        
     )
     return model  
 

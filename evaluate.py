@@ -8,7 +8,8 @@ import argparse
 import os
 import shortuuid
 from pathlib import Path
-            
+from train_doremi import Doremi
+
 def eval_model(args):
     # Model
     checkpoint_path = os.path.join('/projects/nlp_lab/zhiyang/phd4_projects/VL-Instruct/checkpoints',args.model_name, args.checkpoint)

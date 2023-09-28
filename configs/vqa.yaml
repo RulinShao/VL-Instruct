@@ -1,5 +1,5 @@
 # optimizer
-batch_size_train: 32 #16 
+batch_size_train: 16 #16 
 batch_size_test: 1 #32 
 image_size: 224
 weight_decay: 0.0
