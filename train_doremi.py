@@ -31,6 +31,7 @@ from data.utils import save_result
 import pdb
 from data.variables import TASK_LIST, TASK_TO_IDX
 from torch.utils.tensorboard import SummaryWriter
+from models.llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
 
 class Doremi():
     def __init__(self, args):
@@ -385,6 +386,9 @@ if __name__ == '__main__':
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     Path(args.result_dir).mkdir(parents=True, exist_ok=True)
         
-    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))     
+    yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))
+    
+    if 'vicuna' in args.model_type:
+        replace_llama_attn_with_flash_attn()
     
     main(args, config)

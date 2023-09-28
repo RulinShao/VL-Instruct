@@ -30,5 +30,11 @@ python -m torch.distributed.run --nproc_per_node=8 train_vqa.py --model_type bli
 ```
 python -m torch.distributed.run --nproc_per_node=8 train_vqa.py --model_type blip2_vicuna --train_qformer --train_llm
 ```
-
+### change HF cache dir
+```
 export TRANSFORMERS_CACHE=/projects/nlp_lab/zhiyang/.cache/
+```
+### install flash attention for cuda older than 11.4 
+```
+pip install flash-attn==2.1.1 --no-build-isolation
+```
