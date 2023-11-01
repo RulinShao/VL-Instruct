@@ -23,22 +23,70 @@ class vqa_dataset(Dataset):
         self.args = args
         
         if self.split == "train":
-            self.data_type = ['vison-flan']
+            self.data_type = [args.train_data_type]
         elif self.split == "test":
             self.data_type = []
         self.annotations = []
 
         if 'llava' in self.data_type:
-            ann_paths = '/mnt_out/rlshao/data/llava/llava_instruct_150k.json'
-            img_path = '/mnt_out/rlshao/data/coco/train2017'
-            
-            with open(ann_paths, 'r') as f:
-                annotation = json.load(f)
-            for ann in annotation:
-                ann.update({'data_type': 'llava', 'img_dir': img_path})
-
+            ann_paths = '/projects/nlp_lab/yings/workplace/CMOA/playground/data/llava_instruct_150k.json'
+            img_path = '/projects/nlp_lab/yings/workplace/CMOA/coco/train2017'
+            raw_annotation = json.load(open(ann_paths,'r'))
+            if not args.reference_loss_path is None:
+                reference_loss = json.load(open(args.reference_loss_path,'r'))
+            annotation = []
+            for ann in raw_annotation:
+                ann['data_type'] = 'llava'
+                ann['img_dir'] = img_path
+                if args.reference_loss_path:
+                    if not ann['id'] in reference_loss:
+                        continue
+                    reference_loss[ann['id']] = reference_loss[ann['id']][:args.max_txt_len] if len(reference_loss[ann['id']]) >= args.max_txt_len else reference_loss[ann['id']] + [0.0] * (args.max_txt_len - len(reference_loss[ann['id']]))
+                    ann['reference_loss'] = reference_loss[ann['id']]
+                annotation.append(ann)
+            if not len(annotation) == len(raw_annotation):
+                print(f"#### warining lossing {len(raw_annotation) - len(annotation)} instance during processing")
             self.annotations += annotation
-            
+        elif 'vision-flan' in self.data_type:
+            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/vision-flan.filtered_v4.json'
+            vision_flan_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/dataset/'
+            multiinstruct_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images/'
+            raw_annotation = json.load(open(ann_paths,'r'))
+            if not args.reference_loss_path is None:
+                reference_loss = json.load(open(args.reference_loss_path,'r'))
+            annotation = []
+            for ann in raw_annotation:    
+                ann['data_type'] = 'vision-flan'
+                ann['img_dir'] = vision_flan_img_path if ann['id'].startswith('vision-flan') else multiinstruct_img_path
+                if args.reference_loss_path:
+                    if not ann['id'] in reference_loss:
+                        continue
+                    reference_loss[ann['id']] = reference_loss[ann['id']][:args.max_txt_len] if len(reference_loss[ann['id']]) >= args.max_txt_len else reference_loss[ann['id']] + [0.0] * (args.max_txt_len - len(reference_loss[ann['id']]))
+                    ann['reference_loss'] = reference_loss[ann['id']]
+                annotation.append(ann)
+            if not len(annotation) == len(raw_annotation):
+                print(f"#### warining lossing {len(raw_annotation) - len(annotation)} instance during processing")
+            self.annotations += annotation
+        elif 'multiinstruct' in self.data_type:
+            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/multiInstruct.json'
+            img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images'
+            raw_annotation = json.load(open(ann_paths,'r'))
+            if not args.reference_loss_path is None:
+                reference_loss = json.load(open(args.reference_loss_path,'r'))
+            annotation = []
+            for ann in raw_annotation:    
+                ann['data_type'] = 'multiinstruct'
+                ann['img_dir'] = img_path
+                if args.reference_loss_path:
+                    if not ann['id'] in reference_loss:
+                        continue
+                    reference_loss[ann['id']] = reference_loss[ann['id']][:args.max_txt_len] if len(reference_loss[ann['id']]) >= args.max_txt_len else reference_loss[ann['id']] + [0.0] * (args.max_txt_len - len(reference_loss[ann['id']]))
+                    ann['reference_loss'] = reference_loss[ann['id']]
+                annotation.append(ann)
+            if not len(annotation) == len(raw_annotation):
+                print(f"#### warining lossing {len(raw_annotation) - len(annotation)} instance during processing")
+            self.annotations += annotation
+        # ----------------- not useful -----------------
         elif 'mini-gpt4' in self.data_type:
             ann_paths = '/mnt_out/rlshao/data/mini-gpt4/filter_cap.json'
             img_path = '/mnt_out/rlshao/data/mini-gpt4/image'
@@ -86,27 +134,6 @@ class vqa_dataset(Dataset):
                 ann.update({'data_type': 'my-dataset', 'img_dir': img_path})
 
             self.annotations += annotation
-        elif 'vison-flan' in self.data_type:
-            ann_paths = '/projects/nlp_lab/zhiyang/phd4_projects/VL-Instruct/dataset/vision-flan_unique_id.json'
-            vision_flan_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/dataset/'
-            multiinstruct_img_path = '/projects/nlp_lab/zhiyang/phd4_projects/vison-FLAN/images/'
-            raw_annotation = json.load(open(ann_paths,'r'))
-            if not args.reference_loss_path is None:
-                reference_loss = json.load(open(args.reference_loss_path,'r'))
-                
-            annotation = []
-            for ann in raw_annotation:    
-                ann['data_type'] = 'vision-flan'
-                ann['img_dir'] = vision_flan_img_path if ann['id'].startswith('vision-flan') else multiinstruct_img_path
-                if args.reference_loss_path:
-                    if not ann['id'] in reference_loss:
-                        continue
-                    reference_loss[ann['id']] = reference_loss[ann['id']][:args.max_txt_len] if len(reference_loss[ann['id']]) >= args.max_txt_len else reference_loss[ann['id']] + [0.0] * (args.max_txt_len - len(reference_loss[ann['id']]))
-                    ann['reference_loss'] = reference_loss[ann['id']]
-                annotation.append(ann)
-            if not len(annotation) == len(raw_annotation):
-                print(f"#### warining lossing {len(raw_annotation) - len(annotation)} instance during processing")
-            self.annotations += annotation
         else:
             assert self.split == 'test'
             data_dir = '/mnt_out/rlshao/data/multiInstruct_v1.0/eval'
@@ -127,21 +154,35 @@ class vqa_dataset(Dataset):
         data_type = ann['data_type']
         
         reference_loss = None
-        if data_type == 'llava' or data_type == 'lamm':
-            if data_type == 'llava':
-                image_path = os.path.join(ann['img_dir'], ann['image'])
-                unique_id = ann['id']
-            elif data_type == 'lamm':
-                image_path = os.path.join(ann['img_dir'], ann['image'])
-                unique_id = ann['image']
+        if data_type in ['vision-flan','multiinstruct', 'llava']:
+            """
+            {"id": "vision-flan_coco+image_classification_appliance+13368", "image": "alok_checked/sampled_dataset/coco+image_classification_appliance/images/coco+image_classification_appliance_728_000000124349.jpg", "task_name": "coco+image_classification_appliance", "conversations": [{"from": "human", "value": "Given an image of a common electronic appliance from around the house, identify the type of object it is. It could be an appliance that is commonly used in the kitchen to cook or store food.\nOptions: (a) This image contains an oven (b) This image contains a refrigerator (c) This image contains a sink (d) This image contains a toaster (e) This image contains a microwave\n<image>"}, {"from": "gpt", "value": "(e) This image contains a microwave"}]}
+            """
+            instance_id = ann['id']
+            image_path = os.path.join(ann['img_dir'], ann['image'])
             image = Image.open(image_path).convert('RGB')
             image = self.transform(image)
+
+            instruction = ann['conversations'][0]['value']
+            target = ann['conversations'][1]['value']
+            unique_id = ann['id']
+            task_name = ann.get('task_name','llava')
+            reference_loss = [ann.get('reference_loss', 0.0)]
+        # if data_type == 'llava' or data_type == 'lamm':
+        #     if data_type == 'llava':
+        #         image_path = os.path.join(ann['img_dir'], ann['image'])
+        #         unique_id = ann['id']
+        #     elif data_type == 'lamm':
+        #         image_path = os.path.join(ann['img_dir'], ann['image'])
+        #         unique_id = ann['image']
+        #     image = Image.open(image_path).convert('RGB')
+        #     image = self.transform(image)
             
-            num_conversations = len(ann['conversations'])//2
-            chosen_idx = 2 * random.randint(0, num_conversations-1)
-            assert ann['conversations'][chosen_idx]['from'] == 'human'
-            instruction = ann['conversations'][chosen_idx]['value']
-            target = ann['conversations'][chosen_idx + 1]['value']
+        #     num_conversations = len(ann['conversations'])//2
+        #     chosen_idx = 2 * random.randint(0, num_conversations-1)
+        #     assert ann['conversations'][chosen_idx]['from'] == 'human'
+        #     instruction = ann['conversations'][chosen_idx]['value']
+        #     target = ann['conversations'][chosen_idx + 1]['value']
         elif data_type == 'mini-gpt4':
             image_path = os.path.join(ann['img_dir'], f"{ann['image_id']}.jpg")
             image = Image.open(image_path).convert('RGB')
@@ -165,20 +206,6 @@ class vqa_dataset(Dataset):
 
             instruction, target = build_instruction(**ann)
             unique_id = ann['unique_id']
-        elif data_type == 'vision-flan':
-            """
-            {"id": "vision-flan_coco+image_classification_appliance+13368", "image": "alok_checked/sampled_dataset/coco+image_classification_appliance/images/coco+image_classification_appliance_728_000000124349.jpg", "task_name": "coco+image_classification_appliance", "conversations": [{"from": "human", "value": "Given an image of a common electronic appliance from around the house, identify the type of object it is. It could be an appliance that is commonly used in the kitchen to cook or store food.\nOptions: (a) This image contains an oven (b) This image contains a refrigerator (c) This image contains a sink (d) This image contains a toaster (e) This image contains a microwave\n<image>"}, {"from": "gpt", "value": "(e) This image contains a microwave"}]}
-            """
-            instance_id = ann['id']
-            image_path = os.path.join(ann['img_dir'], ann['image'])
-            image = Image.open(image_path).convert('RGB')
-            image = self.transform(image)
-
-            instruction = ann['conversations'][0]['value']
-            target = ann['conversations'][1]['value']
-            unique_id = ann['id']
-            task_name = ann['task_name']
-            reference_loss = [ann.get('reference_loss',0.0)]
         else:
             image_path = ann['image_path']
             image = Image.open(image_path).convert('RGB')
@@ -205,7 +232,7 @@ class vqa_dataset(Dataset):
             try:
                 domain_id = TASK_TO_IDX[task_name]
             except:
-                pdb.set_trace()
+                domain_id = -1
 
             return instance_id, image, question, answers, weights, reference_loss, domain_id
         

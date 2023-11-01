@@ -18,7 +18,7 @@ class BLIP2_VQA(Blip2Base):
     def __init__(self,                 
                     ckpt_path=None,
                     evaluate=False,
-                    model_type="blip2_vicuna",
+                    model_type="vicuna7b",
                     train_llm=False,
                     train_qformer=True,
                     max_txt_len=32,
@@ -41,8 +41,11 @@ class BLIP2_VQA(Blip2Base):
         else:
             self.model, self.vis_processors, _ = load_model_and_preprocess(name=model_name, model_type=model_type, is_eval=evaluate, device=device)  # hard-coded in lavis to use pretrain ckpt
             self.model.max_txt_len = max_txt_len
-            if model_type is 'blip2_vicuna':
+            print(f"Training {model_name} {model_type} {self.model.max_txt_len}")
+            if model_type == 'blip2_vicuna':
                 self.model.qformer_text_input = False
+                print(f"model output length: {self.model.max_output_txt_len}")
+                # self.model.max_output_txt_len = max_txt_len
 
         if train_llm and model_name == "blip2_vicuna_instruct":
             for name, param in self.model.llm_model.named_parameters():

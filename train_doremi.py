@@ -372,7 +372,8 @@ if __name__ == '__main__':
     parser.add_argument('--doremi_accumulation_steps', default=1, help="accumulation steps for updating doremi domain weights")
     parser.add_argument('--doremi', action='store_true', help='train model with doremi')
     parser.add_argument('--reference_loss_path', default=None, help="the reference loss to use when using doremi")
-    parser.add_argument('--max_txt_len', default=32, help="maximum text length during traning")
+    parser.add_argument('--max_txt_len', default=32, help="maximum text length during traning", type=int)
+    parser.add_argument('--train_data_type', default='vision-flan', type=str, choices=["vision-flan", "llava", "multiinstruct"])
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
@@ -389,6 +390,10 @@ if __name__ == '__main__':
     yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))
     
     if 'vicuna' in args.model_type:
+        print('< using flash attention for vicuna. >')
         replace_llama_attn_with_flash_attn()
+    print(f"< training data use is {args.train_data_type} >")
+    print(f"< output dir is {args.output_dir} >")
+    print(f"< model type is {args.model_type} >")
     
     main(args, config)
